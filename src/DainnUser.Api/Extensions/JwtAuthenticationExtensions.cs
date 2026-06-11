@@ -1,11 +1,7 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Text;
 using DainnUser.Core.Authorization;
-using DainnUser.Infrastructure.Configuration;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using DainnUser.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.IdentityModel.Tokens;
 
 namespace DainnUser.Api.Extensions;
 
@@ -16,7 +12,11 @@ public static class JwtAuthenticationExtensions
 {
     /// <summary>
     /// Registers JWT bearer authentication using DainnUser's JWT options.
-    /// Reads <c>DainnUser:Jwt</c> from configuration and binds <see cref="JwtOptions"/>.
+    /// Reads <c>DainnUser:Jwt</c> from configuration and binds <see cref="DainnUser.Infrastructure.Configuration.JwtOptions"/>.
+    /// <para>
+    /// Note: <c>AddDainnUser()</c> now calls this automatically. This method is kept for
+    /// backward compatibility — calling it again is safe (idempotent).
+    /// </para>
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configuration">The application configuration.</param>
@@ -25,50 +25,10 @@ public static class JwtAuthenticationExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var jwt = configuration.GetSection("DainnUser:Jwt").Get<JwtOptions>() ?? new JwtOptions();
+        // Delegate to the Infrastructure method (handles idempotency internally)
+        services.AddDainnUserAuthentication(configuration);
 
-        if (string.IsNullOrWhiteSpace(jwt.Secret))
-        {
-            throw new InvalidOperationException(
-                "DainnUser:Jwt:Secret is not configured. Cannot wire JWT bearer authentication.");
-        }
-
-        var keyBytes = Encoding.UTF8.GetBytes(jwt.Secret);
-        if (keyBytes.Length < 32)
-        {
-            throw new InvalidOperationException(
-                "DainnUser:Jwt:Secret must be at least 32 bytes (256 bits) for HMAC-SHA256.");
-        }
-
-        var signingKey = new SymmetricSecurityKey(keyBytes)
-        {
-            KeyId = "DainnUserSigningKey"
-        };
-
-        // Clear the default inbound claim type map to prevent JWT claims from being transformed
-        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
-
-        services
-            .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
-            {
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = jwt.ValidateIssuer,
-                    ValidateAudience = jwt.ValidateAudience,
-                    ValidateIssuerSigningKey = true,
-                    ValidateLifetime = true,
-                    ValidIssuer = jwt.Issuer,
-                    ValidAudience = jwt.Audience,
-                    IssuerSigningKey = signingKey,
-                    ClockSkew = TimeSpan.FromSeconds(jwt.ClockSkewSeconds)
-                };
-
-                // Set MapInboundClaims = false to use JwtSecurityTokenHandler (compatible
-                // with JwtTokenService) instead of the default JsonWebTokenHandler.
-                options.MapInboundClaims = false;
-            });
-
+        // Add DainnUser-specific authorization policies
         services.AddAuthorization(options =>
         {
             options.AddPolicy(DainnUserPolicies.CanReadUsers, policy =>

@@ -445,3 +445,4 @@ docs/*
 !docs/dainnuser-guide.html
 !docs/dainnstripe-guide.html
 !docs/integration-guide.html
+*.lscache

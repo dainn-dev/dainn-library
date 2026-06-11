@@ -1,12 +1,17 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using DainnUser.Application;
 using DainnUser.Core.Configuration;
 using DainnUser.Core.Interfaces.Repositories;
 using DainnUser.Core.Interfaces.Services;
+using DainnUser.Infrastructure.Configuration;
 using DainnUser.Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 
 namespace DainnUser.Infrastructure;
 
@@ -61,6 +66,62 @@ public static class DainnUserServiceExtensions
 
         // Add infrastructure services
         services.AddDainnUserInfrastructure(configuration);
+
+        // Add JWT bearer authentication + authorization
+        services.AddDainnUserAuthentication(configuration);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers JWT bearer authentication and authorization using DainnUser's JWT options.
+    /// Called automatically by <see cref="AddDainnUser"/>. Can also be called standalone
+    /// if only authentication registration is needed.
+    /// </summary>
+    public static IServiceCollection AddDainnUserAuthentication(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Skip if authentication is already registered
+        if (services.Any(d => d.ServiceType == typeof(Microsoft.AspNetCore.Authentication.IAuthenticationService)))
+            return services;
+
+        var jwt = configuration.GetSection("DainnUser:Jwt").Get<JwtOptions>() ?? new JwtOptions();
+
+        if (string.IsNullOrWhiteSpace(jwt.Secret))
+            return services; // Will be caught by ValidateConfiguration if mandatory
+
+        var keyBytes = Encoding.UTF8.GetBytes(jwt.Secret);
+        var signingKey = new SymmetricSecurityKey(keyBytes) { KeyId = "DainnUserSigningKey" };
+
+        // Clear default inbound claim type map to preserve JWT claim names
+        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+
+        services
+            .AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = jwt.ValidateIssuer,
+                    ValidateAudience = jwt.ValidateAudience,
+                    ValidateIssuerSigningKey = true,
+                    ValidateLifetime = true,
+                    ValidIssuer = jwt.Issuer,
+                    ValidAudience = jwt.Audience,
+                    IssuerSigningKey = signingKey,
+                    ClockSkew = TimeSpan.FromSeconds(jwt.ClockSkewSeconds)
+                };
+
+                options.MapInboundClaims = false;
+            });
+
+        services.AddAuthorization();
 
         return services;
     }
